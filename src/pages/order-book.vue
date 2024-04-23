@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useFetch, useBreakpoints, breakpointsVuetifyV3 } from '@vueuse/core';
-import { ref, computed } from 'vue';
+import { useFetch, useBreakpoints, breakpointsVuetifyV3, useWebSocket } from '@vueuse/core';
+import { ref, computed, watch } from 'vue';
 import { useAppStore } from '@/stores/app';
 
 const appStore = useAppStore();
@@ -13,7 +13,48 @@ const getOrderBook = async () => {
   const { isFetching, error, data } = await useFetch(url).json()
   console.log(data.value);
   asks.value = data.value.asks;
-  bids.value = data.value.asks;
+  bids.value = data.value.bids;
+  const { lastUpdateId } = data.value;
+
+  const websocketURL = `wss://stream.binance.com:9443/ws/${appStore.currencyPair.toLowerCase()}@depth`;
+
+  const { status, data: webSocketData, send, open, close } = useWebSocket(websocketURL);
+  const unwatchDepthDiffStream = watch(webSocketData, (newData) => {
+    if(newData) {
+      const newDataParsed = JSON.parse(newData);
+      if(newDataParsed.u > lastUpdateId) {
+        newDataParsed.b.forEach((bid) => {
+          const bidToUpdateIndex = bids.value.findIndex((b) => b[0] === bid[0]);
+          const bidToUpdate = bids.value[bidToUpdateIndex];
+          if(bidToUpdate) {
+            console.log('bidToUpdate', bidToUpdate);
+            if(bid[1] === '0.00000000') {
+              bids.value.splice(bidToUpdateIndex, 1);
+            } else {
+              bidToUpdate[1] = bid[1];
+            }
+          }
+        })
+        newDataParsed.a.forEach((ask) => {
+          const askToUpdateIndex = asks.value.findIndex((a) => a[0] === ask[0]);
+          const askToUpdate = asks.value[askToUpdateIndex];
+          if(askToUpdate) {
+            console.log('askToUpdate', askToUpdate);
+            if(ask[1] === '0.00000000') {
+              asks.value.splice(askToUpdateIndex, 1);
+            } else {
+              askToUpdate[1] = ask[1];
+            }
+          }
+        })
+        if(asks.value.length < 50 || bids.value.length < 50) {
+          unwatchDepthDiffStream();
+          close();
+          getOrderBook();
+        }
+      }
+    }
+  });
 }
 getOrderBook();
 
